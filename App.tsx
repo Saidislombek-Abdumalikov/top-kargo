@@ -149,9 +149,7 @@ function App() {
     return (
       <Registration 
         onRegister={() => setIsRegistered(true)} 
-        onAdminLogin={() => {
-          setIsAdminMode(true);
-        }} 
+        // Admin access is available via url/#admin
       />
     );
   }
