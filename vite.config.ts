@@ -3,20 +3,22 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  base: './',
-  define: {
-    'process.env.API_KEY': JSON.stringify(process.env.API_KEY || "")
-  },
-  server: {
-    port: 3000
-  },
   build: {
-    outDir: 'dist',
-    emptyOutDir: true,
     rollupOptions: {
+      external: [
+        'react',
+        'react-dom',
+        'react-dom/client',
+        '@supabase/supabase-js',
+        'recharts',
+        'lucide-react',
+        'react-router-dom'
+      ],
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'xlsx', '@google/genai']
+        format: 'es',
+        globals: {
+          react: 'React',
+          'react-dom': 'ReactDOM'
         }
       }
     }
