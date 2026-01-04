@@ -1,5 +1,4 @@
-
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Navbar from './components/Navbar';
 import TabHome from './components/TabHome';
 import TabCalculator from './components/TabCalculator';
@@ -11,6 +10,12 @@ import AdminDashboard from './components/AdminDashboard';
 import AddTrackModal from './components/AddTrackModal';
 import { Tab } from './types';
 import { getUserProfile, logoutUser, syncGlobalSettings } from './services/storageService';
+import { getSupabase } from './supabaseClient';
+
+// --- SUPABASE CONFIGURATION ---
+// We use the shared client from supabaseClient.ts
+const supabase = getSupabase();
+// ------------------------------
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>(Tab.HOME);
@@ -19,23 +24,104 @@ function App() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  // Used to track session duration
+  const sessionStartTime = useRef<number>(Date.now());
+
   useEffect(() => {
-    if (window.Telegram?.WebApp) {
-      window.Telegram.WebApp.ready();
-      window.Telegram.WebApp.expand();
+    // 1. Check for Admin URL (e.g. website.com/#admin)
+    if (window.location.hash === '#admin') {
+      setIsAdminMode(true);
+    }
+
+    // 2. Initialize Telegram WebApp
+    const tg = (window as any).Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
       try {
-        window.Telegram.WebApp.enableClosingConfirmation();
+        tg.enableClosingConfirmation();
       } catch (e) {
         console.log('Closing confirmation not supported');
       }
     }
 
+    // 3. Check Local Registration
     const profile = getUserProfile();
     if (profile && profile.clientId && profile.phone) {
       setIsRegistered(true);
     }
     
     syncGlobalSettings();
+
+    // 4. --- START SUPABASE TRACKING ---
+    const initTracking = async () => {
+      if (!supabase) return;
+
+      const tg = (window as any).Telegram?.WebApp;
+      if (!tg) return;
+
+      const user = tg.initDataUnsafe?.user;
+      if (!user) return; // Only track if we have a valid Telegram user
+
+      // A. Real-time Presence (Shows "Online Now" on your Admin Dashboard)
+      const channel = supabase.channel('online-users', {
+        config: {
+          presence: {
+            key: user.id.toString(),
+          },
+        },
+      });
+
+      channel.subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track({
+            user_id: user.id,
+            online_at: new Date().toISOString(),
+          });
+        }
+      });
+
+      // B. Log to Database (Users & Activity Logs)
+      try {
+        // Upsert User (Update last_active if exists, Create if new)
+        await supabase.from('users').upsert({
+          telegram_id: user.id,
+          first_name: user.first_name,
+          username: user.username,
+          last_active: new Date().toISOString()
+        });
+
+        // Log the login event
+        await supabase.from('activity_logs').insert({
+          telegram_id: user.id,
+          event_type: 'login',
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        console.error("Tracking error:", error);
+      }
+    };
+
+    initTracking();
+    // ----------------------------------
+
+    // 5. Handle Session End (Optional: Log when they close the app)
+    const handleUnload = () => {
+       const tg = (window as any).Telegram?.WebApp;
+       const user = tg?.initDataUnsafe?.user;
+       if(user && supabase) {
+         const duration = Math.floor((Date.now() - sessionStartTime.current) / 1000);
+         supabase.from('activity_logs').insert({
+            telegram_id: user.id,
+            event_type: 'session_end',
+            session_duration: duration,
+            timestamp: new Date().toISOString()
+         }).then(() => {});
+       }
+    };
+    window.addEventListener("unload", handleUnload);
+    return () => window.removeEventListener("unload", handleUnload);
+
   }, []);
 
   const handleLogout = () => {
@@ -52,6 +138,7 @@ function App() {
   if (isAdminMode) {
       return <AdminDashboard onLogout={() => {
         setIsAdminMode(false);
+        // Clean URL hash
         if (window.location.hash === '#admin') {
             history.pushState("", document.title, window.location.pathname + window.location.search);
         }
